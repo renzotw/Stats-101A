@@ -1,0 +1,389 @@
+---
+title: "Final Kaggle Project"
+author: "Renzo Tanaka-Wong"
+date: "2/28/2021"
+output: pdf_document
+---
+# Download Useful Packages
+```{r}
+library(readr)
+library(corrplot)
+library(ggplot2)
+library(car)
+library(leaps)
+library(GGally)
+library(caret)
+```
+# Download data
+```{r}
+cars.train <- read_csv("carsTrain.csv")
+cars.test <- read_csv("carsTestNoY.csv")
+dim(cars.train)
+dim(cars.test)
+```
+# Exploratory Data Analysis
+## Categorical Variables
+First let's see which of our predictors are numerical and which are categorical.
+```{r}
+head(cars.train)
+# Number of numeric predictors
+sum(unlist(lapply(cars.train, is.numeric)))
+unlist(lapply(cars.train, is.numeric))
+# Number of categorical predictors
+sum(unlist(lapply(cars.train, is.character)))
+unlist(lapply(cars.train, is.character))
+```
+Let's start by graphing the categorical variables and explore their relationships with our response variable PriceNew.
+```{r}
+# Count by manufacturers
+ggplot(data=cars.train, aes(x=reorder(Manufacturer, -table(Manufacturer)[Manufacturer]))) + geom_bar() + theme(axis.text.x = element_text(angle = 90, hjust = 1)) + labs(title="Barplot of Manufacturers")
+# Plot of mean prices by manufacturer
+mean_prices_manufacturer <- tapply(cars.train$PriceNew, cars.train$Manufacturer, mean)
+qplot(reorder(names(mean_prices_manufacturer), -mean_prices_manufacturer), mean_prices_manufacturer) + theme(axis.text.x = element_text(angle = 90, hjust = 1)) + labs(title="Mean Prices by Manufacturer") + xlab("Manufacturer") + ylab("Price")
+# Mean prices by model
+mean_prices_model <- tapply(cars.train$PriceNew, cars.train$Model, mean)
+qplot(reorder(names(mean_prices_model), -mean_prices_model), mean_prices_model) + theme(axis.text.x = element_text(angle = 90, hjust = 1)) + labs(title="Mean Prices by Model") + xlab("Model") + ylab("Price")
+# Mean prices by make
+mean_prices_make <- tapply(cars.train$PriceNew, cars.train$Make, mean)
+qplot(reorder(names(mean_prices_make), -mean_prices_make), mean_prices_make) + theme(axis.text.x = element_text(angle = 90, hjust = 1)) + labs(title="Mean Prices by Make")+ xlab("Make") + ylab("Price")
+# Type
+ggplot(cars.train, aes(x=Type, y=PriceNew)) +geom_boxplot(aes(fill= Type,shape = Type))
+ggplot(data=cars.train, aes(x=reorder(Type, -table(Type)[Type]))) + geom_bar() + theme(axis.text.x = element_text(angle = 90, hjust = 1)) + labs(title="Barplot of Type")
+# AirBAgs
+ggplot(cars.train, aes(x=AirBags, y=PriceNew)) + geom_boxplot(aes(fill= AirBags,shape = AirBags))
+ggplot(data=cars.train, aes(x=reorder(AirBags, -table(AirBags)[AirBags]))) + geom_bar() + theme(axis.text.x = element_text(angle = 90, hjust = 1)) + labs(title="Barplot of AirBAgs")
+# DriveTrain
+ggplot(cars.train, aes(x=DriveTrain, y=PriceNew)) + geom_boxplot(aes(fill= DriveTrain,shape = DriveTrain))
+ggplot(data=cars.train, aes(x=reorder(DriveTrain, -table(DriveTrain)[DriveTrain]))) + geom_bar() + theme(axis.text.x = element_text(angle = 90, hjust = 1)) + labs(title="Barplot of DriveTrain")
+# Cylinders
+ggplot(cars.train, aes(x=Cylinders, y=PriceNew)) +geom_boxplot(aes(fill= Cylinders,shape = Cylinders))
+ggplot(data=cars.train, aes(x=reorder(Cylinders, -table(Cylinders)[Cylinders]))) + geom_bar() + theme(axis.text.x = element_text(angle = 90, hjust = 1)) + labs(title="Barplot of Cylinders")
+# Man.trans.avail
+ggplot(cars.train, aes(x=Man.trans.avail, y=PriceNew)) + geom_boxplot(aes(fill= Man.trans.avail,shape = Man.trans.avail))
+ggplot(data=cars.train, aes(x=reorder(Man.trans.avail, -table(Man.trans.avail)[Man.trans.avail]))) + geom_bar() + theme(axis.text.x = element_text(angle = 90, hjust = 1)) + labs(title="Barplot of Man.trans.avail")
+# Origin
+ggplot(cars.train, aes(x=Origin, y=PriceNew)) +geom_boxplot(aes(fill= Origin,shape = Origin))
+ggplot(data=cars.train, aes(x=reorder(Origin, -table(Origin)[Origin]))) + geom_bar() + theme(axis.text.x = element_text(angle = 90, hjust = 1)) + labs(title="Barplot of Origin")
+```
+## Two Categorical Variables
+We have seen how each categorical predictor interacts with the price of cars. Let's see some of these variables further broken down by categorical predictors with two outcomes, such as ManTrans and Origin.
+```{r}
+# Type by Mantrans 
+ggplot(cars.train, aes(x=Type, y=PriceNew)) +geom_boxplot(aes(fill= Man.trans.avail,shape = Man.trans.avail))
+# Cylinders by Manstrans
+ggplot(cars.train, aes(x=Cylinders, y=PriceNew)) +geom_boxplot(aes(fill= Man.trans.avail,shape = Man.trans.avail))
+# Type by Origin
+ggplot(cars.train, aes(x=Type, y=PriceNew)) +geom_boxplot(aes(fill= Origin,shape = Origin))
+# Cylinders by Origin (Combine)
+ggplot(cars.train, aes(x=Cylinders, y=PriceNew)) +geom_boxplot(aes(fill= Origin,shape = Origin))
+```
+From these visualizations we can make several initial observations. 
+
+First, Model and Make provide the same information, each with 93 unique categories. It would be inefficient for our regression model to predict the prices of cars using their names since this is all the information we would need. Furthermore, a model using this information would have many betas and lead to overfitting. Instead we can summarize this information by creating a new categorical variable that synthesizes this data into different bins. We will create four bins from the model data: Luxury, High, Medium, and Low. 
+
+Next, we can group the categories 4WD and Front together since they appear to have similar average prices.
+
+Subsetting cylinders by origin appears to have a sinificant difference in car prices.
+
+We want to further explore the significxant of the rest of the categorical predictors so we will leave them as they are.
+
+## Numerical Variables
+Next, let's visualize the numerical variables.
+```{r}
+numeric <- cars.train[c("PriceNew", "Horsepower", "Weight", "Fuel.tank.capacity", "EngineSize", "Length", "Wheelbase", "Width", "Turn.circle", "Luggage.room", "Rear.seat.room", "Passengers", "RPM", "Rev.per.mile", "MPG.highway")]
+numeric.cor <- cor(numeric, method = c("spearman"))
+# Correlation Matrix
+numeric.cor
+corrplot.mixed(numeric.cor, upper="number", lower="pie")
+```
+Horsepower, Weight, and Fuel tank capacity have the strongest positive correlation to price, while MPG, rev per mile, and RPM have the strongest negative correlation. Let's visaulize each of our independent continuous variables along with Price.
+## Visualizing numerical variables
+```{r}
+ggplot(cars.train, aes(x=Horsepower, y=PriceNew)) + geom_point() + geom_smooth()
+ggplot(cars.train, aes(x=Weight, y=PriceNew)) + geom_point() + geom_smooth()
+ggplot(cars.train, aes(x=Fuel.tank.capacity, y=PriceNew)) + geom_point() + geom_smooth()
+ggplot(cars.train, aes(x=EngineSize, y=PriceNew)) + geom_point() + geom_smooth()
+ggplot(cars.train, aes(x=Length, y=PriceNew)) + geom_point() + geom_smooth()
+ggplot(cars.train, aes(x=Wheelbase, y=PriceNew)) + geom_point() + geom_smooth()
+ggplot(cars.train, aes(x=Width, y=PriceNew)) + geom_point() + geom_smooth()
+ggplot(cars.train, aes(x=Turn.circle, y=PriceNew)) + geom_point() + geom_smooth()
+ggplot(cars.train, aes(x=Luggage.room, y=PriceNew)) + geom_point() + geom_smooth()
+ggplot(cars.train, aes(x=Rear.seat.room, y=PriceNew)) + geom_point() + geom_smooth()
+ggplot(cars.train, aes(x=Passengers, y=PriceNew)) + geom_point() + geom_smooth()
+ggplot(cars.train, aes(x=RPM, y=PriceNew)) + geom_point() + geom_smooth()
+ggplot(cars.train, aes(x=Rev.per.mile, y=PriceNew)) + geom_point() + geom_smooth()
+ggplot(cars.train, aes(x=MPG.highway, y=PriceNew)) + geom_point() + geom_smooth()
+```
+From these plots of the numerical predictors we can see that passengers would be better off as a categorical predictor. Let's treat it as a factor and plot it again.
+
+## Passengers as a categorical predictor
+```{r}
+ggplot(cars.train, aes(x=as.factor(Passengers), y=PriceNew)) +geom_boxplot(aes(fill= as.factor(Passengers),shape = as.factor(Passengers)))
+ggplot(data=cars.train, aes(x=reorder(Passengers, -table(Passengers)[Passengers]))) + geom_bar() + theme(axis.text.x = element_text(angle = 90, hjust = 1)) + labs(title="Barplot of Passangers")
+```
+
+# Creating new variables
+We can now create new variables from the various observations we made above.
+```{r}
+# New categorical variable for the models based on price
+cars.train$mod_category <- ifelse(mean_prices_model[cars.train$Model] >= 40000, "Luxury",  ifelse(mean_prices_model[cars.train$Model] >= 30000 & mean_prices_model[cars.train$Model] < 40000 , "High", ifelse(mean_prices_model[cars.train$Model] <= 15000, "Low", "Medium")))
+# Combine 4WD and Front together
+cars.train$DriveTrain <- ifelse(cars.train$DriveTrain == "Rear", "Rear", "Other")
+# Combining Cylinders and Origin
+cars.train$Cylinders_Origin <- paste(cars.train$Cylinders, cars.train$Origin)
+```
+# Create a new training data frame
+```{r}
+# Drop the Ob column and original categorical predictors for which we created new variables
+# 1-Ob, 2-Manufacturer, 3-Model, 8-Cylinders, 23-Origin, 24-Make
+cars.train.new <- cars.train[-c(1,2,3,8,23,24)]
+dmy <- dummyVars( ~. ,data=cars.train.new,fullRank =T)
+cars.train.new <- data.frame(predict(dmy,newdata = cars.train.new))
+dim(cars.train.new)
+head(cars.train.new)
+```
+# Full model using all variables
+We now create our first regression model using all predictors in our new training data frame. 
+```{r}
+# Full model
+full_model <- lm(PriceNew~., data=cars.train.new)
+summary(full_model)
+anova(full_model)
+vif(full_model)
+par(mfrow=c(2,2))
+plot(full_model)
+```
+# Initial Transformations
+```{r}
+summary(powerTransform(cbind(PriceNew, MPG.highway, EngineSize, Horsepower, RPM, Rev.per.mile, Fuel.tank.capacity, Passengers, Length, Wheelbase, Width, Turn.circle, Rear.seat.room, Luggage.room, Weight)~1, data=cars.train.new))
+inverseResponsePlot(full_model, lam=c(-1,0,1))
+```
+Let's see the effect of the power transformation.
+```{r}
+summary(lm(I(PriceNew^(-0.33)) ~ TypeLarge + TypeMidsize + TypeSmall + TypeSporty + TypeVan + I(MPG.highway^(-1.00)) + AirBagsDriver.only + AirBagsNone + DriveTrainRear + I(EngineSize^(-0.13)) + I(Horsepower^(0.07)) + I(RPM^(1.65)) + log(Rev.per.mile) + Man.trans.availYes + log(Passengers) + I(Fuel.tank.capacity^(0.50)) + Length + I(Wheelbase^(-1.00)) + I(Width^(-1.00)) + Turn.circle + I(Rear.seat.room^(0.5)) + Luggage.room + I(Weight^(0.5)) + mod_categoryLow + mod_categoryLuxury + mod_categoryMedium + Cylinders_Origin4.non.USA + Cylinders_Origin4.USA + Cylinders_Origin5.non.USA + Cylinders_Origin6.non.USA + Cylinders_Origin6.USA + Cylinders_Origin8.non.USA + Cylinders_Origin8.USA + Cylinders_Originrotary.non.USA, data=cars.train.new))
+
+summary(lm(log(PriceNew) ~ TypeLarge + TypeMidsize + TypeSmall + TypeSporty + TypeVan + log(MPG.highway) + AirBagsDriver.only + AirBagsNone + DriveTrainRear + log(EngineSize) + log(Horsepower) + log(RPM) + log(Rev.per.mile) + Man.trans.availYes + log(Passengers) + log(Fuel.tank.capacity) + log(Length) + log(Wheelbase) + log(Width) + log(Turn.circle) + log(Rear.seat.room) + log(Luggage.room) + log(Weight) + mod_categoryLow + mod_categoryLuxury + mod_categoryMedium + Cylinders_Origin4.non.USA + Cylinders_Origin4.USA + Cylinders_Origin5.non.USA + Cylinders_Origin6.non.USA + Cylinders_Origin6.USA + Cylinders_Origin8.non.USA + Cylinders_Origin8.USA + Cylinders_Originrotary.non.USA, data=cars.train.new))
+``` 
+It appears that the untransformed full model is better based on the r-squared and adjusted r-squared score. Let's check the full model's outliers and leverage points.
+# Outliers and leverage values.
+```{r}
+# Plot of leverage vs standardized residuals
+cars.train.new$lev <- hatvalues(full_model)
+cars.train.new$stdres <- rstandard(full_model)
+rvl_plot <- qplot(lev, stdres, data=cars.train.new) + geom_hline(yintercept=c(-2,2), linetype="dashed", col="red") 
+# Add boundary lines
+rvl_plot <- rvl_plot + geom_vline(xintercept=4/dim(cars.train.new)[1], linetype="dashed", col="blue")
+rvl_plot <- rvl_plot + labs(title="Standardized Residuals vs. Leverage")
+rvl_plot
+# Bad Leverage points
+c(which((cars.train.new$lev > 4/dim(cars.train.new)[1]) & (abs(cars.train.new$stdres) > 2)))
+```
+Let's try deleting the bad leverage values.
+```{r}
+# Delete bad leverage points
+cars.train.new <- cars.train.new[-c(which((cars.train.new$lev > 4/dim(cars.train.new)[1]) & (abs(cars.train.new$stdres) > 2))),]
+dim(cars.train.new)
+```
+Finally, lets update and revisit our full model.
+```{r}
+full_model <- update(full_model,.~.-lev-stdres)
+summary(full_model)
+```
+# Variable selection
+Now we use the regsubsets function to determine the optimal number of variables in our regression model. 
+```{r}
+out <- regsubsets(as.matrix(cars.train.new[,-23]), cars.train.new[,23], nvmax = 20)
+plot(1:21,summary(out)$bic)
+lines(1:21,summary(out)$bic)
+plot(out, scale="bic")
+plot(1:21,summary(out)$rsq)
+lines(1:21,summary(out)$rsq)
+```
+
+We also use the step functions for similar analysis. 
+```{r}
+backAIC <- step(full_model, direction='backward')
+forwardAIC <- step(full_model, direction='forward')
+backBIC <- step(full_model, direction='backward', k=length(cars.train.new$PriceNew))
+forwardBIC <- step(full_model, direction='forward', k=length(cars.train.new$PriceNew))
+summary(backAIC)
+summary(forwardAIC)
+summary(backBIC)
+summary(forwardBIC)
+```
+From our analysis it appears that having more variables is optimal. However, our goal is to optimize a model with the least amount of predictors so let's take out the variables which have low p-values and update our full model.
+
+```{r}
+prediction_model <- update(full_model, .~. - TypeSmall - AirBagsDriver.only - DriveTrainRear - Rev.per.mile - Man.trans.availYes - Wheelbase - Turn.circle - Cylinders_Origin4.non.USA - Cylinders_Origin4.USA - Cylinders_Origin6.USA - Cylinders_Origin8.non.USA - Cylinders_Originrotary.non.USA, data=cars.train.new)
+sort(vif(prediction_model),decreasing =T)
+summary(prediction_model)
+```
+We will proceed by removing points based on their sgnificance and relative VIF score. The procedure is as follows: Delete predictors with high P-values/high VIFs until all VIF scores are under 5 and multicolinearity is dealt with.
+
+```{r}
+prediction_model <- update(prediction_model,.~. -Rear.seat.room)
+summary(prediction_model)
+sort(vif(prediction_model),decreasing =T)
+```
+```{r}
+prediction_model <- update(prediction_model,.~. -TypeLarge)
+summary(prediction_model)
+sort(vif(prediction_model),decreasing =T)
+```
+```{r}
+prediction_model <- update(prediction_model,.~. -Cylinders_Origin8.USA)
+summary(prediction_model)
+sort(vif(prediction_model),decreasing =T)
+```
+```{r}
+prediction_model <- update(prediction_model,.~. -TypeMidsize)
+summary(prediction_model)
+sort(vif(prediction_model),decreasing =T)
+```
+```{r}
+prediction_model <- update(prediction_model,.~. -EngineSize)
+summary(prediction_model)
+sort(vif(prediction_model),decreasing =T)
+```
+```{r}
+prediction_model <- update(prediction_model,.~. -RPM)
+summary(prediction_model)
+sort(vif(prediction_model),decreasing =T)
+```
+```{r}
+prediction_model <- update(prediction_model,.~. -TypeSporty)
+summary(prediction_model)
+sort(vif(prediction_model),decreasing =T)
+```
+```{r}
+prediction_model <- update(prediction_model,.~. -Passengers)
+summary(prediction_model)
+sort(vif(prediction_model),decreasing =T)
+```
+```{r}
+prediction_model <- update(prediction_model,.~. -Length)
+summary(prediction_model)
+sort(vif(prediction_model),decreasing =T)
+```
+```{r}
+prediction_model <- update(prediction_model,.~. -MPG.highway)
+summary(prediction_model)
+sort(vif(prediction_model),decreasing =T)
+```
+```{r}
+prediction_model <- update(prediction_model,.~. -Fuel.tank.capacity)
+summary(prediction_model)
+sort(vif(prediction_model),decreasing =T)
+```
+```{r}
+prediction_model <- update(prediction_model,.~. -TypeVan)
+summary(prediction_model)
+sort(vif(prediction_model),decreasing =T)
+```
+```{r}
+prediction_model <- update(prediction_model,.~. -Weight)
+summary(prediction_model)
+sort(vif(prediction_model),decreasing =T)
+```
+This is our first model where all VIF values are under 5. Let's see if it is worth taking out more predictors.
+```{r}
+anova(lm(formula = PriceNew ~ AirBagsNone + Horsepower + Luggage.room + 
+    mod_categoryLow + mod_categoryLuxury + mod_categoryMedium + 
+    Cylinders_Origin5.non.USA + Cylinders_Origin6.non.USA, data = cars.train.new), prediction_model)
+```
+From the above anova output we can see that the F-score and corresponding p-value are significant. This means that a lot of information is lost by reducing the number of predictors in the model. Therefore, the difference between having 9 predictors and 8 is significant and it is better to have 9.
+
+# mmps
+```{r}
+mmps(prediction_model)
+leveragePlots(prediction_model)
+```
+
+# Y vs y-hat
+```{r}
+plot(cars.train.new$PriceNew, predict(prediction_model, newdata = cars.train.new))
+```
+
+
+
+
+Let's look at the diagnostic plots.
+```{r}
+# Diagnostic Plots
+par(mfrow=c(2,2))
+plot(prediction_model)
+# Plot of leverage vs standardized residuals
+cars.train.new$lev <- hatvalues(prediction_model)
+cars.train.new$stdres <- rstandard(prediction_model)
+rvl_plot <- qplot(lev, stdres, data=cars.train.new) + geom_hline(yintercept=c(-2,2), linetype="dashed", col="red") 
+# Add boundary lines
+rvl_plot <- rvl_plot + geom_vline(xintercept=4/dim(cars.train.new)[1], linetype="dashed", col="blue")
+rvl_plot <- rvl_plot + labs(title="Standardized Residuals vs. Leverage")
+rvl_plot
+```
+The assumptions of random variance appear to hold, while normailty and constant variance seem to be violated as apparent in the non-linear line in the Normal Q-Q plot as well as the upward-trending line in the Scale-Location plot. Let's see if we can make transformations to improve our model.
+
+# Box Cox Transformation
+```{r}
+summary(powerTransform(cbind(PriceNew, Horsepower, Width, Luggage.room)~1,data=cars.train.new))
+```
+# Power Transformed model
+```{r}
+prediction_model_pt <- lm(formula = log(PriceNew) ~ AirBagsNone + log(Horsepower) + log(Width) + log(Luggage.room) + 
+    mod_categoryLow + mod_categoryLuxury + mod_categoryMedium + 
+    Cylinders_Origin5.non.USA + Cylinders_Origin6.non.USA, data = cars.train.new)
+summary(prediction_model_pt)
+```
+# Inverse Response Plot
+```{r}
+inverseResponsePlot(prediction_model, lam=c(-1,0,1))
+```
+```{r}
+prediction_model_inv <- lm(formula = PriceNew^1.111753 ~ AirBagsNone + Horsepower + Width + Luggage.room + 
+    mod_categoryLow + mod_categoryLuxury + mod_categoryMedium + 
+    Cylinders_Origin5.non.USA + Cylinders_Origin6.non.USA, data = cars.train.new)
+```
+
+
+
+
+# Create new test data frame based on same steps as training set
+```{r}
+# New categorical variable for the models based on price
+cars.test$mod_category <- ifelse(mean_prices_model[cars.test$Model] >= 40000, "Luxury",  ifelse(mean_prices_model[cars.test$Model] >= 30000 & mean_prices_model[cars.test$Model] < 40000 , "High", ifelse(mean_prices_model[cars.test$Model] <= 15000, "Low", "Medium")))
+# Combine 4WD and Front together
+cars.test$DriveTrain <- ifelse(cars.test$DriveTrain == "Rear", "Rear", "Other")
+# Combining Cylinders and Origin
+cars.test$Cylinders_Origin <- paste(cars.test$Cylinders, cars.test$Origin)
+```
+# Create a new testing data frame
+```{r}
+# Drop the Ob column and original categorical predictors for which we created new variables
+# 2-Manufacturer, 3-Model, 8-Cylinders, 23-Origin, 24-Make
+cars.test.new <- cars.test[-c(2,3,8,23,24)]
+dmy <- dummyVars( ~. ,data=cars.test.new,fullRank =T)
+cars.test.new <- data.frame(predict(dmy,newdata = cars.test.new))
+```
+
+# New Test data
+```{r}
+write.csv(cars.test.new, 'cars.test.new.csv')
+```
+
+# Fit model
+```{r}
+cars.test.new$PriceNew <- predict(prediction_model, newdata = cars.test.new)
+cars.test.new$PriceNew <- cars.test.new$PriceNew
+write.csv(cars.test.new[c("Ob", "PriceNew")],'car_prediction14.csv',row.names = FALSE)
+```
+
+```{r}
+extractAIC(prediction_model, k=log(dim(cars.train.new[1])))
+```
+
+
+
+
+
+
+

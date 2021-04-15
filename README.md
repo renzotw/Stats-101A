@@ -1,5 +1,5 @@
 # Stats-101A
-Introduction to Data Analysis and Regression with Professor Akram Almohalawas
+Introduction to Data Analysis and Regression with Professor Akram Almohalawas at UCLA
 
 Course Overview: 
 - Applied regression analysis with emphasis on general linear models and generalized linear models
